@@ -39,6 +39,7 @@
 GListPtr fsa_message_queue = NULL;
 extern void crm_shutdown(int nsig);
 
+extern crm_ipc_t *attrd_ipc;
 void handle_response(xmlNode * stored_msg);
 enum crmd_fsa_input handle_request(xmlNode * stored_msg, enum crmd_fsa_cause cause);
 enum crmd_fsa_input handle_shutdown_request(xmlNode * stored_msg);
@@ -838,7 +839,7 @@ handle_response(xmlNode * stored_msg)
         crm_log_xml_err(stored_msg, "Bad message");
 
     } else if (AM_I_DC && strcmp(op, CRM_OP_PECALC) == 0) {
-        /* Check if the PE answer been superceeded by a subsequent request? */
+        /* Check if the PE answer been superseded by a subsequent request? */
         const char *msg_ref = crm_element_value(stored_msg, XML_ATTR_REFERENCE);
 
         if (msg_ref == NULL) {

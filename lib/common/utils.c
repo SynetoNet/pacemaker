@@ -163,6 +163,24 @@ check_number(const char *value)
 }
 
 gboolean
+check_quorum(const char *value)
+{
+    if (safe_str_eq(value, "stop")) {
+        return TRUE;
+
+    } else if (safe_str_eq(value, "freeze")) {
+        return TRUE;
+
+    } else if (safe_str_eq(value, "ignore")) {
+        return TRUE;
+
+    } else if (safe_str_eq(value, "suicide")) {
+        return TRUE;
+    }
+    return FALSE;
+}
+
+gboolean
 check_utilization(const char *value)
 {
     char *end = NULL;
@@ -268,6 +286,9 @@ cluster_option(GHashTable * options, gboolean(*validate) (const char *),
 
         if (options == NULL) {
             return def_value;
+
+        } else if(def_value == NULL) {
+            return def_value;
         }
 
         g_hash_table_insert(options, strdup(name), strdup(def_value));
@@ -301,7 +322,6 @@ get_cluster_pref(GHashTable * options, pe_cluster_option * option_list, int len,
         }
     }
     CRM_CHECK(found, crm_err("No option named: %s", name));
-    CRM_ASSERT(value != NULL);
     return value;
 }
 
@@ -1380,7 +1400,7 @@ crm_pid_active(long pid)
 #endif
 }
 
-static int
+int
 crm_read_pidfile(const char *filename)
 {
     int fd;
@@ -1408,7 +1428,7 @@ crm_read_pidfile(const char *filename)
     return pid;
 }
 
-static int
+int
 crm_pidfile_inuse(const char *filename, long mypid)
 {
     long pid = 0;
@@ -1692,7 +1712,7 @@ crm_create_long_opts(struct crm_option *long_options)
      * This dummy entry allows us to differentiate between the two in crm_get_option()
      * and exit with the correct error code
      */
-    long_opts = realloc(long_opts, (index + 1) * sizeof(struct option));
+    long_opts = realloc_safe(long_opts, (index + 1) * sizeof(struct option));
     long_opts[index].name = "__dummmy__";
     long_opts[index].has_arg = 0;
     long_opts[index].flag = 0;
@@ -1704,7 +1724,7 @@ crm_create_long_opts(struct crm_option *long_options)
             continue;
         }
 
-        long_opts = realloc(long_opts, (index + 1) * sizeof(struct option));
+        long_opts = realloc_safe(long_opts, (index + 1) * sizeof(struct option));
         /*fprintf(stderr, "Creating %d %s = %c\n", index,
          * long_options[lpc].name, long_options[lpc].val);      */
         long_opts[index].name = long_options[lpc].name;
@@ -1715,7 +1735,7 @@ crm_create_long_opts(struct crm_option *long_options)
     }
 
     /* Now create the list terminator */
-    long_opts = realloc(long_opts, (index + 1) * sizeof(struct option));
+    long_opts = realloc_safe(long_opts, (index + 1) * sizeof(struct option));
     long_opts[index].name = NULL;
     long_opts[index].has_arg = 0;
     long_opts[index].flag = 0;
@@ -1739,7 +1759,7 @@ crm_set_options(const char *short_options, const char *app_usage, struct crm_opt
 
         for (lpc = 0; long_options[lpc].name != NULL; lpc++) {
             if (long_options[lpc].val && long_options[lpc].val != '-' && long_options[lpc].val < UCHAR_MAX) {
-                local_short_options = realloc(local_short_options, opt_string_len + 4);
+                local_short_options = realloc_safe(local_short_options, opt_string_len + 4);
                 local_short_options[opt_string_len++] = long_options[lpc].val;
                 /* getopt(3) says: Two colons mean an option takes an optional arg; */
                 if (long_options[lpc].has_arg == optional_argument) {
@@ -1987,6 +2007,10 @@ attrd_update_delegate(crm_ipc_t * ipc, char command, const char *host, const cha
     }
 
     switch (command) {
+        case 'u':
+            crm_xml_add(update, F_ATTRD_TASK, "update");
+            crm_xml_add(update, F_ATTRD_REGEX, name);
+            break;
         case 'D':
         case 'U':
         case 'v':
@@ -2141,6 +2165,7 @@ create_operation_update(xmlNode * parent, lrmd_event_data_t * op, const char *ca
     char *op_id = NULL;
     char *op_id_additional = NULL;
     char *local_user_data = NULL;
+    const char *exit_reason = NULL;
 
     xmlNode *xml_op = NULL;
     const char *task = NULL;
@@ -2201,6 +2226,7 @@ create_operation_update(xmlNode * parent, lrmd_event_data_t * op, const char *ca
             /* Ensure 'last' gets updated too in case recording-pending="true" */
             op_id_additional = generate_op_key(op->rsc_id, "last", 0);
         }
+        exit_reason = op->exit_reason;
 
     } else if (op->interval > 0) {
         op_id = strdup(key);
@@ -2234,6 +2260,7 @@ create_operation_update(xmlNode * parent, lrmd_event_data_t * op, const char *ca
     crm_xml_add(xml_op, XML_ATTR_CRM_VERSION, caller_version);
     crm_xml_add(xml_op, XML_ATTR_TRANSITION_KEY, op->user_data);
     crm_xml_add(xml_op, XML_ATTR_TRANSITION_MAGIC, magic);
+    crm_xml_add(xml_op, XML_LRM_ATTR_EXIT_REASON, exit_reason);
 
     crm_xml_add_int(xml_op, XML_LRM_ATTR_CALLID, op->call_id);
     crm_xml_add_int(xml_op, XML_LRM_ATTR_RC, op->rc);
@@ -2490,7 +2517,7 @@ add_list_element(char *list, const char *value)
     }
     len = last + 2;             /* +1 space, +1 EOS */
     len += strlen(value);
-    list = realloc(list, len);
+    list = realloc_safe(list, len);
     sprintf(list + last, " %s", value);
     return list;
 }

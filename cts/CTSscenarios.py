@@ -1,6 +1,8 @@
 from CTS import *
 from CTStests import CTSTest
 from CTSaudits import ClusterAudit
+from cts.watcher  import LogWatcher
+
 class ScenarioComponent:
 
     def __init__(self, Env):
@@ -21,6 +23,7 @@ class ScenarioComponent:
         '''Tear down (undo) the given ScenarioComponent'''
         raise ValueError("Abstract Class member (Setup)")
 
+
 class Scenario:
     (
 '''The basic idea of a scenario is that of an ordered list of
@@ -37,6 +40,7 @@ A partially set up scenario is torn down if it fails during setup.
     def __init__(self, ClusterManager, Components, Audits, Tests):
 
         "Initialize the Scenario from the list of ScenarioComponents"
+
         self.ClusterManager = ClusterManager
         self.Components = Components
         self.Audits  = Audits
@@ -75,20 +79,23 @@ A partially set up scenario is torn down if it fails during setup.
     def SetUp(self):
         '''Set up the Scenario. Return TRUE on success.'''
 
-        self.audit() # Also detects remote/local log config
         self.ClusterManager.prepare()
+        self.audit() # Also detects remote/local log config
+        self.ClusterManager.StatsMark(0)
         self.ClusterManager.ns.WaitForAllNodesToComeUp(self.ClusterManager.Env["nodes"])
 
         self.audit()
         if self.ClusterManager.Env["valgrind-tests"]:
             self.ClusterManager.install_helper("cts.supp")
 
-        self.BadNews = LogWatcher(self.ClusterManager.Env,
-                                  self.ClusterManager["LogFileName"],
-                                  self.ClusterManager["BadRegexes"], "BadNews", 0)
+        self.BadNews = LogWatcher(self.ClusterManager.Env["LogFileName"],
+                                  self.ClusterManager.templates.get_patterns(
+                                      self.ClusterManager.Env["Name"], "BadNews"), "BadNews", 0,
+                                  kind=self.ClusterManager.Env["LogWatcher"],
+                                  hosts=self.ClusterManager.Env["nodes"])
         self.BadNews.setwatch() # Call after we've figured out what type of log watching to do in LogAudit
 
-        j=0
+        j = 0
         while j < len(self.Components):
             if not self.Components[j].SetUp(self.ClusterManager):
                 # OOPS!  We failed.  Tear partial setups down.
@@ -96,7 +103,7 @@ A partially set up scenario is torn down if it fails during setup.
                 self.ClusterManager.log("Tearing down partial setup")
                 self.TearDown(j)
                 return None
-            j=j+1
+            j = j + 1
 
         self.audit()
         return 1
@@ -107,17 +114,18 @@ A partially set up scenario is torn down if it fails during setup.
 
         if max == None:
             max = len(self.Components)-1
-        j=max
+        j = max
         while j >= 0:
             self.Components[j].TearDown(self.ClusterManager)
-            j=j-1
+            j = j - 1
 
         self.audit()
+        self.ClusterManager.StatsExtract()
 
     def incr(self, name):
         '''Increment (or initialize) the value associated with the given name'''
         if not self.Stats.has_key(name):
-            self.Stats[name]=0
+            self.Stats[name] = 0
         self.Stats[name] = self.Stats[name]+1
 
     def run(self, Iterations):
@@ -139,9 +147,9 @@ A partially set up scenario is torn down if it fails during setup.
         where = ""
         did_run = 0
 
-        self.ClusterManager.Env.StatsMark(testcount)
+        self.ClusterManager.StatsMark(testcount)
         self.ClusterManager.instance_errorstoignore_clear()
-        self.ClusterManager.log(("Running test %s" % test.name).ljust(35) + (" (%s) " % nodechoice).ljust(15) +"["+ ("%d" % testcount).rjust(3) +"]")
+        self.ClusterManager.log(("Running test %s" % test.name).ljust(35) + (" (%s) " % nodechoice).ljust(15) + "[" + ("%d" % testcount).rjust(3) + "]")
 
         starttime = test.set_timer()
         if not test.setup(nodechoice):
@@ -163,7 +171,7 @@ A partially set up scenario is torn down if it fails during setup.
                 raise ValueError("Teardown of %s on %s failed" % (test.name, nodechoice))
             ret = 0
 
-        stoptime=time.time()
+        stoptime = time.time()
         self.ClusterManager.oprofileSave(testcount)
 
         elapsed_time = stoptime - starttime
@@ -214,7 +222,7 @@ A partially set up scenario is torn down if it fails during setup.
         self.ClusterManager.log("<<<<<<<<<<<<<<<< TESTS COMPLETED")
 
     def audit(self, LocalIgnore=[]):
-        errcount=0
+        errcount = 0
         ignorelist = []
         ignorelist.append("CTS:")
         ignorelist.extend(LocalIgnore)
@@ -233,7 +241,7 @@ A partially set up scenario is torn down if it fails during setup.
         while errcount < 1000:
             match = None
             if self.BadNews:
-                match=self.BadNews.look(0)
+                match = self.BadNews.look(0)
 
             if match:
                 add_err = 1
@@ -243,7 +251,7 @@ A partially set up scenario is torn down if it fails during setup.
                 if add_err == 1:
                     self.ClusterManager.log("BadNews: " + match)
                     self.incr("BadNews")
-                    errcount=errcount+1
+                    errcount = errcount + 1
             else:
                 break
         else:
@@ -254,47 +262,55 @@ A partially set up scenario is torn down if it fails during setup.
                 self.TearDown()
                 raise ValueError("Looks like we hit a BadNews jackpot!")
 
+        if self.BadNews:
+            self.BadNews.end()
         return failed
+
 
 class AllOnce(Scenario):
     '''Every Test Once''' # Accessable as __doc__
     def run_loop(self, Iterations):
-        testcount=1
+        testcount = 1
         for test in self.Tests:
             self.run_test(test, testcount)
             testcount += 1
 
+
 class RandomTests(Scenario):
     '''Random Test Execution'''
     def run_loop(self, Iterations):
-        testcount=1
+        testcount = 1
         while testcount <= Iterations:
             test = self.ClusterManager.Env.RandomGen.choice(self.Tests)
             self.run_test(test, testcount)
             testcount += 1
 
+
 class BasicSanity(Scenario):
     '''Basic Cluster Sanity'''
     def run_loop(self, Iterations):
-        testcount=1
+        testcount = 1
         while testcount <= Iterations:
             test = self.Environment.RandomGen.choice(self.Tests)
             self.run_test(test, testcount)
             testcount += 1
 
+
 class Sequence(Scenario):
     '''Named Tests in Sequence'''
     def run_loop(self, Iterations):
-        testcount=1
+        testcount = 1
         while testcount <= Iterations:
             for test in self.Tests:
                 self.run_test(test, testcount)
                 testcount += 1
 
+
 class Boot(Scenario):
     '''Start the Cluster'''
     def run_loop(self, Iterations):
-        testcount=0
+        testcount = 0
+
 
 class BootCluster(ScenarioComponent):
     (
@@ -330,6 +346,7 @@ as they might have been rebooted or crashed for some reason beforehand.
         CM.log("Stopping Cluster Manager on all nodes")
         return CM.stopall(verbose=True, force=force)
 
+
 class LeaveBooted(BootCluster):
     def TearDown(self, CM):
         '''Set up the given ScenarioComponent'''
@@ -338,6 +355,7 @@ class LeaveBooted(BootCluster):
 
         CM.log("Leaving Cluster running on all nodes")
         return 1
+
 
 class PingFest(ScenarioComponent):
     (
@@ -368,13 +386,13 @@ According to the manual page for ping:
     def SetUp(self, CM):
         '''Start the PingFest!'''
 
-        self.PingSize=1024
+        self.PingSize = 1024
         if CM.Env.has_key("PingSize"):
-                self.PingSize=CM.Env["PingSize"]
+                self.PingSize = CM.Env["PingSize"]
 
         CM.log("Starting %d byte flood pings" % self.PingSize)
 
-        self.PingPids=[]
+        self.PingPids = []
         for node in CM.Env["nodes"]:
             self.PingPids.append(self._pingchild(node))
 
@@ -393,7 +411,6 @@ According to the manual page for ping:
 
         Args = ["ping", "-qfn", "-s", str(self.PingSize), node]
 
-
         sys.stdin.flush()
         sys.stdout.flush()
         sys.stderr.flush()
@@ -405,13 +422,12 @@ According to the manual page for ping:
         if pid > 0:
             return pid
 
-
         # Otherwise, we're the child process.
-
 
         os.execvp("ping", Args)
         self.Env.log("Cannot execvp ping: " + repr(Args))
         sys.exit(1)
+
 
 class PacketLoss(ScenarioComponent):
     (
@@ -436,7 +452,6 @@ amount of packet loss present.
         CM.log("Reduce the reliability of communications")
 
         return 1
-
 
     def TearDown(self, CM):
         '''Fix the reliability of communications'''
@@ -473,6 +488,7 @@ class BasicSanityCheck(ScenarioComponent):
         CM.log("Stopping Cluster Manager on BSC node(s).")
         return CM.stopall()
 
+
 class Benchmark(ScenarioComponent):
     (
 '''
@@ -495,6 +511,7 @@ class Benchmark(ScenarioComponent):
     def TearDown(self, CM):
         CM.log("Stopping Cluster Manager on all node(s).")
         return CM.stopall()
+
 
 class RollingUpgrade(ScenarioComponent):
     (
@@ -533,6 +550,7 @@ Test a rolling upgrade between two versions of the stack
         return self.install(node, self.CM.Env["previous-version"])
 
     def SetUp(self, CM):
+        print repr(self)+"prepare"
         CM.prepare()
 
         # Clear out the cobwebs

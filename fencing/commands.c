@@ -232,6 +232,22 @@ stonith_device_execute(stonith_device_t * device)
         return TRUE;
     }
 
+    if(safe_str_eq(device->agent, STONITH_WATCHDOG_AGENT)) {
+        if(safe_str_eq(cmd->action, "reboot")) {
+            pcmk_panic(__FUNCTION__);
+            return TRUE;
+
+        } else if(safe_str_eq(cmd->action, "off")) {
+            pcmk_panic(__FUNCTION__);
+            return TRUE;
+
+        } else {
+            crm_info("Faking success for %s watchdog operation", cmd->action);
+            cmd->done_cb(0, 0, NULL, cmd);
+            return TRUE;
+        }
+    }
+
 #if SUPPORT_CIBSECRETS
     if (replace_secret_params(device->id, device->params) < 0) {
         /* replacing secrets failed! */
@@ -520,7 +536,10 @@ get_agent_metadata(const char *agent)
     }
 
     buffer = g_hash_table_lookup(metadata_cache, agent);
-    if(buffer == NULL) {
+    if(safe_str_eq(agent, STONITH_WATCHDOG_AGENT)) {
+        return NULL;
+
+    } else if(buffer == NULL) {
         stonith_t *st = stonith_api_new();
         int rc = st->cmds->metadata(st, st_opt_sync_call, agent, NULL, &buffer, 10);
 
@@ -1075,7 +1094,10 @@ stonith_device_action(xmlNode * msg, char **output)
         device = g_hash_table_lookup(device_list, id);
     }
 
-    if (device) {
+    if (device && device->api_registered == FALSE) {
+        rc = -ENODEV;
+
+    } else if (device) {
         cmd = create_async_command(msg);
         if (cmd == NULL) {
             free_device(device);
@@ -1329,7 +1351,6 @@ stonith_query_capable_device_cb(GList * devices, void *user_data)
         if (is_action_required(query->action, device)) {
             crm_xml_add_int(dev, F_STONITH_DEVICE_REQUIRED, 1);
         }
-        crm_xml_add_int(dev, F_STONITH_DEVICE_VERIFIED, device->verified);
         if (action_specific_timeout) {
             crm_xml_add_int(dev, F_STONITH_ACTION_TIMEOUT, action_specific_timeout);
         }
@@ -2087,6 +2108,14 @@ handle_request(crm_client_t * client, uint32_t id, uint32_t flags, xmlNode * req
 
         free_async_command(cmd);
         free_xml(reply);
+
+    } else if(safe_str_eq(op, CRM_OP_RM_NODE_CACHE)) {
+        int id = 0;
+        const char *name = NULL;
+
+        crm_element_value_int(request, XML_ATTR_ID, &id);
+        name = crm_element_value(request, XML_ATTR_UNAME);
+        reap_crm_member(id, name);
 
     } else {
         crm_err("Unknown %s from %s", op, client ? client->name : remote_peer);

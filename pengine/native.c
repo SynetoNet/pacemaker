@@ -1137,12 +1137,18 @@ handle_migration_actions(resource_t * rsc, node_t *current, node_t *chosen, pe_w
     if (migrate_to) {
         add_hash_param(migrate_to->meta, XML_LRM_ATTR_MIGRATE_SOURCE, current->details->uname);
         add_hash_param(migrate_to->meta, XML_LRM_ATTR_MIGRATE_TARGET, chosen->details->uname);
-        /* migrate_to takes place on the source node, but can 
-         * have an effect on the target node depending on how
-         * the agent is written. Because of this, we have to maintain
-         * a record that the migrate_to occurred incase the source node 
-         * loses membership while the migrate_to action is still in-flight. */
-        add_hash_param(migrate_to->meta, XML_OP_ATTR_PENDING, "true");
+
+        /* pcmk remote connections don't require pending to be recorded in cib.
+         * We can optimize cib writes by only setting PENDING for non pcmk remote
+         * connection resources */
+        if (rsc->is_remote_node == FALSE) {
+            /* migrate_to takes place on the source node, but can 
+             * have an effect on the target node depending on how
+             * the agent is written. Because of this, we have to maintain
+             * a record that the migrate_to occurred incase the source node 
+             * loses membership while the migrate_to action is still in-flight. */
+            add_hash_param(migrate_to->meta, XML_OP_ATTR_PENDING, "true");
+        }
     }
 
     if (migrate_from) {
@@ -1227,10 +1233,17 @@ native_create_actions(resource_t * rsc, pe_working_set_t * data_set)
             const char *type = crm_element_value(rsc->xml, XML_ATTR_TYPE);
             const char *class = crm_element_value(rsc->xml, XML_AGENT_ATTR_CLASS);
 
-            pe_proc_err("Resource %s (%s::%s) is active on %d nodes %s",
-                        rsc->id, class, type, num_active_nodes, recovery2text(rsc->recovery_type));
-            crm_warn("See %s for more information.",
-                     "http://clusterlabs.org/wiki/FAQ#Resource_is_Too_Active");
+            if(rsc->partial_migration_target && rsc->partial_migration_source) {
+                crm_notice("Resource %s can no longer migrate to %s. Stopping on %s too", rsc->id,
+                           rsc->partial_migration_target->details->uname,
+                           rsc->partial_migration_source->details->uname);
+
+            } else {
+                pe_proc_err("Resource %s (%s::%s) is active on %d nodes %s",
+                            rsc->id, class, type, num_active_nodes, recovery2text(rsc->recovery_type));
+                crm_warn("See %s for more information.",
+                         "http://clusterlabs.org/wiki/FAQ#Resource_is_Too_Active");
+            }
 
             if (rsc->recovery_type == recovery_stop_start) {
                 need_stop = TRUE;
@@ -1882,7 +1895,7 @@ native_update_actions(action_t * first, action_t * then, node_t * node, enum pe_
         } else if ((then_rsc_role == RSC_ROLE_STOPPED) && safe_str_eq(then->task, RSC_STOP)) {
             /* ignore... if 'then' is supposed to be stopped after 'first', but
              * then is already stopped, there is nothing to be done when non-symmetrical.  */
-        } else if ((then_rsc_role == RSC_ROLE_STARTED) && safe_str_eq(then->task, RSC_START)) {
+        } else if ((then_rsc_role >= RSC_ROLE_STARTED) && safe_str_eq(then->task, RSC_START)) {
             /* ignore... if 'then' is supposed to be started after 'first', but
              * then is already started, there is nothing to be done when non-symmetrical.  */
         } else if (!(first->flags & pe_action_runnable)) {
@@ -2090,9 +2103,17 @@ native_rsc_location(resource_t * rsc, rsc_to_node_t * constraint)
             other_node->weight = merge_weights(other_node->weight, node->weight);
 
         } else {
-            node_t *new_node = node_copy(node);
+            other_node = node_copy(node);
 
-            g_hash_table_insert(rsc->allowed_nodes, (gpointer) new_node->details->id, new_node);
+            g_hash_table_insert(rsc->allowed_nodes, (gpointer) other_node->details->id, other_node);
+        }
+
+        if (other_node->rsc_discover_mode < constraint->discover_mode) {
+            if (constraint->discover_mode == discover_exclusive) {
+                rsc->exclusive_discover = TRUE;
+            }
+            /* exclusive > never > always... always is default */
+            other_node->rsc_discover_mode = constraint->discover_mode;
         }
     }
 
@@ -2697,6 +2718,7 @@ native_create_probe(resource_t * rsc, node_t * node, action_t * complete,
     char *key = NULL;
     action_t *probe = NULL;
     node_t *running = NULL;
+    node_t *allowed = NULL;
     resource_t *top = uber_parent(rsc);
 
     static const char *rc_master = NULL;
@@ -2772,6 +2794,23 @@ native_create_probe(resource_t * rsc, node_t * node, action_t * complete,
         pe_rsc_trace(rsc, "Skipping active: %s on %s", rsc->id, node->details->uname);
         return FALSE;
     }
+
+    allowed = g_hash_table_lookup(rsc->allowed_nodes, node->details->id);
+    if (rsc->exclusive_discover || top->exclusive_discover) {
+        if (allowed == NULL) {
+            /* exclusive discover is enabled and this node is not in the allowed list. */    
+            return FALSE;
+        } else if (allowed->rsc_discover_mode != discover_exclusive) {
+            /* exclusive discover is enabled and this node is not marked
+             * as a node this resource should be discovered on */ 
+            return FALSE;
+        }
+    }
+    if (allowed && allowed->rsc_discover_mode == discover_never) {
+        /* this resource is marked as not needing to be discovered on this node */
+        return FALSE;
+    }
+
 
     key = generate_op_key(rsc->id, RSC_STATUS, 0);
     probe = custom_action(rsc, key, RSC_STATUS, node, FALSE, TRUE, data_set);

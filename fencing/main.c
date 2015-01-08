@@ -51,6 +51,7 @@
 
 char *stonith_our_uname = NULL;
 char *stonith_our_uuid = NULL;
+long stonith_watchdog_timeout_ms = 0;
 
 GMainLoop *mainloop = NULL;
 
@@ -96,6 +97,7 @@ st_ipc_dispatch(qb_ipcs_connection_t * qbc, void *data, size_t size)
     int call_options = 0;
     xmlNode *request = NULL;
     crm_client_t *c = crm_client_get(qbc);
+    const char *op = NULL;
 
     if (c == NULL) {
         crm_info("Invalid client: %p", qbc);
@@ -105,6 +107,20 @@ st_ipc_dispatch(qb_ipcs_connection_t * qbc, void *data, size_t size)
     request = crm_ipcs_recv(c, data, size, &id, &flags);
     if (request == NULL) {
         crm_ipcs_send_ack(c, id, flags, "nack", __FUNCTION__, __LINE__);
+        return 0;
+    }
+
+
+    op = crm_element_value(request, F_CRM_TASK);
+    if(safe_str_eq(op, CRM_OP_RM_NODE_CACHE)) {
+        crm_xml_add(request, F_TYPE, T_STONITH_NG);
+        crm_xml_add(request, F_STONITH_OPERATION, op);
+        crm_xml_add(request, F_STONITH_CLIENTID, c->id);
+        crm_xml_add(request, F_STONITH_CLIENTNAME, crm_client_name(c));
+        crm_xml_add(request, F_STONITH_CLIENTNODE, stonith_our_uname);
+
+        send_cluster_message(NULL, crm_msg_stonith_ng, request, FALSE);
+        free_xml(request);
         return 0;
     }
 
@@ -414,7 +430,7 @@ topology_remove_helper(const char *node, int level)
     xmlNode *data = create_xml_node(NULL, F_STONITH_LEVEL);
     xmlNode *notify_data = create_xml_node(NULL, STONITH_OP_LEVEL_DEL);
 
-    crm_xml_add(data, "origin", __FUNCTION__);
+    crm_xml_add(data, F_STONITH_ORIGIN, __FUNCTION__);
     crm_xml_add_int(data, XML_ATTR_ID, level);
     crm_xml_add(data, F_STONITH_TARGET, node);
 
@@ -942,6 +958,7 @@ update_cib_cache_cb(const char *event, xmlNode * msg)
 {
     int rc = pcmk_ok;
     xmlNode *stonith_enabled_xml = NULL;
+    xmlNode *stonith_watchdog_xml = NULL;
     const char *stonith_enabled_s = NULL;
     static gboolean stonith_enabled_saved = TRUE;
 
@@ -998,6 +1015,27 @@ update_cib_cache_cb(const char *event, xmlNode * msg)
     stonith_enabled_xml = get_xpath_object("//nvpair[@name='stonith-enabled']", local_cib, LOG_TRACE);
     if (stonith_enabled_xml) {
         stonith_enabled_s = crm_element_value(stonith_enabled_xml, XML_NVPAIR_ATTR_VALUE);
+    }
+
+    if(daemon_option_enabled(crm_system_name, "watchdog")) {
+        const char *value = NULL;
+        long timeout_ms = 0;
+
+        if(value == NULL) {
+            stonith_watchdog_xml = get_xpath_object("//nvpair[@name='stonith-watchdog-timeout']", local_cib, LOG_TRACE);
+            if (stonith_watchdog_xml) {
+                value = crm_element_value(stonith_watchdog_xml, XML_NVPAIR_ATTR_VALUE);
+            }
+        }
+
+        if(value) {
+            timeout_ms = crm_get_msec(value);
+        }
+
+        if(timeout_ms != stonith_watchdog_timeout_ms) {
+            crm_notice("New watchdog timeout %lds (was %lds)", timeout_ms/1000, stonith_watchdog_timeout_ms/1000);
+            stonith_watchdog_timeout_ms = timeout_ms;
+        }
     }
 
     if (stonith_enabled_s && crm_is_true(stonith_enabled_s) == FALSE) {
@@ -1076,6 +1114,7 @@ stonith_cleanup(void)
 static struct crm_option long_options[] = {
     {"stand-alone",         0, 0, 's'},
     {"stand-alone-w-cpg",   0, 0, 'c'},
+    {"logfile",             1, 0, 'l'},
     {"verbose",     0, 0, 'V'},
     {"version",     0, 0, '$'},
     {"help",        0, 0, '?'},
@@ -1162,7 +1201,7 @@ main(int argc, char **argv)
     crm_cluster_t cluster;
     const char *actions[] = { "reboot", "off", "list", "monitor", "status" };
 
-    crm_log_preinit(NULL, argc, argv);
+    crm_log_preinit("stonith-ng", argc, argv);
     crm_set_options(NULL, "mode [options]", long_options,
                     "Provides a summary of cluster's current state."
                     "\n\nOutputs varying levels of detail in a number of different formats.\n");
@@ -1176,6 +1215,9 @@ main(int argc, char **argv)
         switch (flag) {
             case 'V':
                 crm_bump_log_level(argc, argv);
+                break;
+            case 'l':
+                crm_add_logfile(optarg);
                 break;
             case 's':
                 stand_alone = TRUE;
@@ -1340,6 +1382,19 @@ main(int argc, char **argv)
     device_list = g_hash_table_new_full(crm_str_hash, g_str_equal, NULL, free_device);
 
     topology = g_hash_table_new_full(crm_str_hash, g_str_equal, NULL, free_topology_entry);
+
+    if(daemon_option_enabled(crm_system_name, "watchdog")) {
+        xmlNode *xml;
+        stonith_key_value_t *params = NULL;
+
+        params = stonith_key_value_add(params, STONITH_ATTR_HOSTLIST, stonith_our_uname);
+
+        xml = create_device_registration_xml("watchdog", "internal", STONITH_WATCHDOG_AGENT, params, NULL);
+        stonith_device_register(xml, NULL, FALSE);
+
+        stonith_key_value_freeall(params, 1, 1);
+        free_xml(xml);
+    }
 
     stonith_ipc_server_init(&ipcs, &ipc_callbacks);
 

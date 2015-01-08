@@ -1491,6 +1491,7 @@ print_status(pe_working_set_t * data_set)
             const char *node = crm_element_value(xml_op, XML_ATTR_UNAME);
             const char *call = crm_element_value(xml_op, XML_LRM_ATTR_CALLID);
             const char *rc_s = crm_element_value(xml_op, XML_LRM_ATTR_RC);
+            const char *exit_reason = crm_element_value(xml_op, XML_LRM_ATTR_EXIT_REASON);
             const char *status_s = crm_element_value(xml_op, XML_LRM_ATTR_OPSTATUS);
 
             rc = crm_parse_int(rc_s, "0");
@@ -1503,12 +1504,26 @@ print_status(pe_working_set_t * data_set)
                     run_at_s[24] = 0; /* Overwrite the newline */
                 }
 
-                print_as("    %s on %s '%s' (%d): call=%s, status=%s, last-rc-change='%s', queued=%sms, exec=%sms\n",
-                         op_key ? op_key : id, node, services_ocf_exitcode_str(rc), rc, call, services_lrm_status_str(status),
-                         run_at_s, crm_element_value(xml_op, XML_RSC_OP_T_QUEUE), crm_element_value(xml_op, XML_RSC_OP_T_EXEC));
+                print_as("    %s on %s '%s' (%d): call=%s, status=%s, exit-reason='%s', last-rc-change='%s', queued=%sms, exec=%sms\n",
+                         op_key ? op_key : id,
+                         node,
+                         services_ocf_exitcode_str(rc),
+                         rc,
+                         call,
+                         services_lrm_status_str(status),
+                         exit_reason ? exit_reason : "none",
+                         run_at_s,
+                         crm_element_value(xml_op, XML_RSC_OP_T_QUEUE),
+                         crm_element_value(xml_op, XML_RSC_OP_T_EXEC));
             } else {
-                print_as("    %s on %s '%s' (%d): call=%s, status=%s\n",
-                         op_key ? op_key : id, node, services_ocf_exitcode_str(rc), rc, call, services_lrm_status_str(status));
+                print_as("    %s on %s '%s' (%d): call=%s, status=%s, exitreason='%s'\n",
+                         op_key ? op_key : id,
+                         node,
+                         services_ocf_exitcode_str(rc),
+                         rc,
+                         call,
+                         services_lrm_status_str(status),
+                         exit_reason ? exit_reason : "unknown");
             }
         }
         print_as("\n");
@@ -1695,18 +1710,22 @@ print_xml_status(pe_working_set_t * data_set)
              xml_op = __xml_next(xml_op)) {
             int status = 0;
             int rc = 0;
-	    int interval = 0;
+            int interval = 0;
             const char *id = ID(xml_op);
             const char *op_key = crm_element_value(xml_op, XML_LRM_ATTR_TASK_KEY);
-	    const char *task = crm_element_value(xml_op, XML_LRM_ATTR_TASK); // needed?
+            const char *task = crm_element_value(xml_op, XML_LRM_ATTR_TASK); // needed?
             const char *last = crm_element_value(xml_op, XML_RSC_OP_LAST_CHANGE);
             const char *node = crm_element_value(xml_op, XML_ATTR_UNAME);
             const char *call = crm_element_value(xml_op, XML_LRM_ATTR_CALLID);
             const char *rc_s = crm_element_value(xml_op, XML_LRM_ATTR_RC);
-	    const char *interval_s = crm_element_value(xml_op, XML_LRM_ATTR_INTERVAL);
+            const char *exit_reason = crm_element_value(xml_op, XML_LRM_ATTR_EXIT_REASON);
+            const char *interval_s = crm_element_value(xml_op, XML_LRM_ATTR_INTERVAL);
+            char *exit_reason_cleaned = NULL;
 
             rc = crm_parse_int(rc_s, "0");
-	    interval = crm_parse_int(interval_s, "0");
+            interval = crm_parse_int(interval_s, "0");
+
+            exit_reason_cleaned = exit_reason ? crm_xml_escape(exit_reason) : NULL;
 
             if (last) {
                 time_t run_at = crm_parse_int(last, "0");
@@ -1715,13 +1734,32 @@ print_xml_status(pe_working_set_t * data_set)
                     run_at_s[24] = 0; /* Overwrite the newline */
                 }
 
-                fprintf(stream, "        <failure %s=\"%s\" node=\"%s\" exitstatus=\"%s\" exitcode=\"%d\" call=\"%s\" status=\"%s\" last-rc-change=\"%s\" queued=\"%s\" exec=\"%s\" interval=\"%d\" task=\"%s\" />\n",
-                        op_key ? "op_key" : "id" ,op_key ? op_key : id, node, services_ocf_exitcode_str(rc), rc, call, services_lrm_status_str(status),
-                        run_at_s, crm_element_value(xml_op, XML_RSC_OP_T_QUEUE), crm_element_value(xml_op, XML_RSC_OP_T_EXEC), interval, task);
+                fprintf(stream, "        <failure %s=\"%s\" node=\"%s\" exitstatus=\"%s\" exitreason=\"%s\" exitcode=\"%d\" call=\"%s\" status=\"%s\" last-rc-change=\"%s\" queued=\"%s\" exec=\"%s\" interval=\"%d\" task=\"%s\" />\n",
+                        op_key ? "op_key" : "id",
+                        op_key ? op_key : id,
+                        node,
+                        services_ocf_exitcode_str(rc),
+                        exit_reason_cleaned ? exit_reason_cleaned : "none",
+                        rc,
+                        call,
+                        services_lrm_status_str(status),
+                        run_at_s,
+                        crm_element_value(xml_op, XML_RSC_OP_T_QUEUE),
+                        crm_element_value(xml_op, XML_RSC_OP_T_EXEC),
+                        interval,
+                        task);
             } else {
-                print_as("        <failure %s=\"%s\" node=\"%s\" exitstatus=\"%s\" exitcode=\"%d\" call=\"%s\" status=\"%s\" />\n",
-                         op_key ? "op_key" : "id", op_key ? op_key : id, node, services_ocf_exitcode_str(rc), rc, call, services_lrm_status_str(status));
+                print_as("        <failure %s=\"%s\" node=\"%s\" exitstatus=\"%s\" exitreason=\"%s\" exitcode=\"%d\" call=\"%s\" status=\"%s\" />\n",
+                         op_key ? "op_key" : "id",
+                         op_key ? op_key : id,
+                         node,
+                         services_ocf_exitcode_str(rc),
+                         exit_reason_cleaned ? exit_reason_cleaned : "none",
+                         rc,
+                         call,
+                         services_lrm_status_str(status));
             }
+            free(exit_reason_cleaned);
         }
         fprintf(stream, "    </failures>\n");
     }
@@ -2384,7 +2422,7 @@ send_smtp_trap(const char *node, const char *rsc, const char *task, int target_r
 }
 
 static void
-handle_rsc_op(xmlNode * rsc_op)
+handle_rsc_op(xmlNode * xml, const char *node)
 {
     int rc = -1;
     int status = -1;
@@ -2397,13 +2435,24 @@ handle_rsc_op(xmlNode * rsc_op)
     char *rsc = NULL;
     char *task = NULL;
     const char *desc = NULL;
-    const char *node = NULL;
     const char *magic = NULL;
-    const char *id = crm_element_value(rsc_op, XML_LRM_ATTR_TASK_KEY);
+    const char *id = NULL;
     char *update_te_uuid = NULL;
 
-    xmlNode *n = rsc_op;
+    xmlNode *n = xml;
+    xmlNode * rsc_op = xml;
 
+    if(strcmp((const char*)xml->name, XML_LRM_TAG_RSC_OP) != 0) {
+        xmlNode *cIter;
+
+        for(cIter = xml->children; cIter; cIter = cIter->next) {
+            handle_rsc_op(cIter, node);
+        }
+
+        return;
+    }
+
+    id = crm_element_value(rsc_op, XML_LRM_ATTR_TASK_KEY);
     if (id == NULL) {
         /* Compatability with <= 1.1.5 */
         id = ID(rsc_op);
@@ -2430,10 +2479,14 @@ handle_rsc_op(xmlNode * rsc_op)
         n = n->parent;
     }
 
-    node = crm_element_value(n, XML_ATTR_UNAME);
+    if(node == NULL) {
+        node = crm_element_value(n, XML_ATTR_UNAME);
+    }
+
     if (node == NULL) {
         node = ID(n);
     }
+
     if (node == NULL) {
         crm_err("No node detected for event %s (%s)", magic, id);
         goto bail;
@@ -2478,6 +2531,132 @@ mon_trigger_refresh(gpointer user_data)
     return FALSE;
 }
 
+#define NODE_PATT "/lrm[@id="
+static char *get_node_from_xpath(const char *xpath) 
+{
+    char *nodeid = NULL;
+    char *tmp = strstr(xpath, NODE_PATT);
+
+    if(tmp) {
+        tmp += strlen(NODE_PATT);
+        tmp += 1;
+
+        nodeid = strdup(tmp);
+        tmp = strstr(nodeid, "\'");
+        CRM_ASSERT(tmp);
+        tmp[0] = 0;
+    }
+    return nodeid;
+}
+
+static void crm_diff_update_v2(const char *event, xmlNode * msg) 
+{
+    xmlNode *change = NULL;
+    xmlNode *diff = get_message_xml(msg, F_CIB_UPDATE_RESULT);
+
+    for (change = __xml_first_child(diff); change != NULL; change = __xml_next(change)) {
+        const char *name = NULL;
+        const char *op = crm_element_value(change, XML_DIFF_OP);
+        const char *xpath = crm_element_value(change, XML_DIFF_PATH);
+        xmlNode *match = NULL;
+        const char *node = NULL;
+
+        if(op == NULL) {
+            continue;
+
+        } else if(strcmp(op, "create") == 0) {
+            match = change->children;
+
+        } else if(strcmp(op, "move") == 0) {
+            continue;
+
+        } else if(strcmp(op, "delete") == 0) {
+            continue;
+
+        } else if(strcmp(op, "modify") == 0) {
+            match = first_named_child(change, XML_DIFF_RESULT);
+            if(match) {
+                match = match->children;
+            }
+        }
+
+        if(match) {
+            name = (const char *)match->name;
+        }
+
+        crm_trace("Handling %s operation for %s %p, %s", op, xpath, match, name);
+        if(xpath == NULL) {
+            /* Version field, ignore */
+
+        } else if(name == NULL) {
+            crm_debug("No result for %s operation to %s", op, xpath);
+            CRM_ASSERT(strcmp(op, "delete") == 0 || strcmp(op, "move") == 0);
+
+        } else if(strcmp(name, XML_TAG_CIB) == 0) {
+            xmlNode *state = NULL;
+            xmlNode *status = first_named_child(match, XML_CIB_TAG_STATUS);
+
+            for (state = __xml_first_child(status); state != NULL; state = __xml_next(state)) {
+                node = ID(state);
+                handle_rsc_op(state, node);
+            }
+
+        } else if(strcmp(name, XML_CIB_TAG_STATUS) == 0) {
+            xmlNode *state = NULL;
+
+            for (state = __xml_first_child(match); state != NULL; state = __xml_next(state)) {
+                node = ID(state);
+                handle_rsc_op(state, node);
+            }
+
+        } else if(strcmp(name, XML_CIB_TAG_STATE) == 0) {
+            node = ID(match);
+            handle_rsc_op(match, node);
+
+        } else if(strcmp(name, XML_CIB_TAG_LRM) == 0) {
+            node = ID(match);
+            handle_rsc_op(match, node);
+
+        } else if(strcmp(name, XML_LRM_TAG_RESOURCES) == 0) {
+            char *local_node = get_node_from_xpath(xpath);
+
+            handle_rsc_op(match, local_node);
+            free(local_node);
+
+        } else if(strcmp(name, XML_LRM_TAG_RESOURCE) == 0) {
+            char *local_node = get_node_from_xpath(xpath);
+
+            handle_rsc_op(match, local_node);
+            free(local_node);
+
+        } else if(strcmp(name, XML_LRM_TAG_RSC_OP) == 0) {
+            char *local_node = get_node_from_xpath(xpath);
+
+            handle_rsc_op(match, local_node);
+            free(local_node);
+
+        } else {
+            crm_err("Ignoring %s operation for %s %p, %s", op, xpath, match, name);
+        }
+    }
+}
+
+static void crm_diff_update_v1(const char *event, xmlNode * msg) 
+{
+    /* Process operation updates */
+    xmlXPathObject *xpathObj = xpath_search(msg,
+                                            "//" F_CIB_UPDATE_RESULT "//" XML_TAG_DIFF_ADDED
+                                            "//" XML_LRM_TAG_RSC_OP);
+    int lpc = 0, max = numXpathResults(xpathObj);
+
+    for (lpc = 0; lpc < max; lpc++) {
+        xmlNode *rsc_op = getXpathResult(xpathObj, lpc);
+
+        handle_rsc_op(rsc_op, NULL);
+    }
+    freeXpathObject(xpathObj);
+}
+
 void
 crm_diff_update(const char *event, xmlNode * msg)
 {
@@ -2486,6 +2665,7 @@ crm_diff_update(const char *event, xmlNode * msg)
     static bool stale = FALSE;
     static int updates = 0;
     static mainloop_timer_t *refresh_timer = NULL;
+    xmlNode *diff = get_message_xml(msg, F_CIB_UPDATE_RESULT);
 
     print_dot();
 
@@ -2494,23 +2674,20 @@ crm_diff_update(const char *event, xmlNode * msg)
     }
 
     if (current_cib != NULL) {
-        xmlNode *cib_last = current_cib;
-
-        current_cib = NULL;
-
-        rc = cib_apply_patch_event(msg, cib_last, &current_cib, LOG_DEBUG);
-        free_xml(cib_last);
+        rc = xml_apply_patchset(current_cib, diff, TRUE);
 
         switch (rc) {
             case -pcmk_err_diff_resync:
             case -pcmk_err_diff_failed:
                 crm_notice("[%s] Patch aborted: %s (%d)", event, pcmk_strerror(rc), rc);
+                free_xml(current_cib); current_cib = NULL;
                 break;
             case pcmk_ok:
                 updates++;
                 break;
             default:
                 crm_notice("[%s] ABORTED: %s (%d)", event, pcmk_strerror(rc), rc);
+                free_xml(current_cib); current_cib = NULL;
         }
     }
 
@@ -2520,18 +2697,18 @@ crm_diff_update(const char *event, xmlNode * msg)
     }
 
     if (crm_mail_to || snmp_target || external_agent) {
-        /* Process operation updates */
-        xmlXPathObject *xpathObj = xpath_search(msg,
-                                                "//" F_CIB_UPDATE_RESULT "//" XML_TAG_DIFF_ADDED
-                                                "//" XML_LRM_TAG_RSC_OP);
-        int lpc = 0, max = numXpathResults(xpathObj);
-
-        for (lpc = 0; lpc < max; lpc++) {
-            xmlNode *rsc_op = getXpathResult(xpathObj, lpc);
-
-            handle_rsc_op(rsc_op);
+        int format = 0;
+        crm_element_value_int(diff, "format", &format);
+        switch(format) {
+            case 1:
+                crm_diff_update_v1(event, msg);
+                break;
+            case 2:
+                crm_diff_update_v2(event, msg);
+                break;
+            default:
+                crm_err("Unknown patch format: %d", format);
         }
-        freeXpathObject(xpathObj);
     }
 
     if (current_cib == NULL) {

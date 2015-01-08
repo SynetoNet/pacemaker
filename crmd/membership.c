@@ -33,6 +33,7 @@
 #include <crmd_callbacks.h>
 #include <tengine.h>
 #include <membership.h>
+#include <crmd.h>
 
 gboolean membership_flux_hack = FALSE;
 void post_cache_update(int instance);
@@ -214,9 +215,11 @@ search_conflicting_node_callback(xmlNode * msg, int call_id, int rc,
             crm_notice("Searching conflicting nodes for %s failed: %s (%d)",
                        new_node_uuid, pcmk_strerror(rc), rc);
         }
+        free(new_node_uuid);
         return;
 
     } else if (output == NULL) {
+        free(new_node_uuid);
         return;
     }
 
@@ -412,6 +415,11 @@ void
 crm_update_quorum(gboolean quorum, gboolean force_update)
 {
     ever_had_quorum |= quorum;
+
+    if(ever_had_quorum && quorum == FALSE && no_quorum_suicide_escalation) {
+        pcmk_panic(__FUNCTION__);
+    }
+
     if (AM_I_DC && (force_update || fsa_has_quorum != quorum)) {
         int call_id = 0;
         xmlNode *update = NULL;

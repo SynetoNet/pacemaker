@@ -23,7 +23,8 @@ extern rsc_colocation_t *invert_constraint(rsc_colocation_t * constraint);
 
 extern rsc_to_node_t *copy_constraint(rsc_to_node_t * constraint);
 
-extern rsc_to_node_t *rsc2node_new(const char *id, resource_t * rsc, int weight, node_t * node,
+extern rsc_to_node_t *rsc2node_new(const char *id, resource_t * rsc, int weight,
+                                   const char *discovery_mode, node_t * node,
                                    pe_working_set_t * data_set);
 
 extern void pe_free_rsc_to_node(GListPtr constraints);
@@ -37,9 +38,6 @@ extern gboolean rsc_colocation_new(const char *id, const char *node_attr, int sc
 extern gboolean rsc_ticket_new(const char *id, resource_t * rsc_lh, ticket_t * ticket,
                                const char *state_lh, const char *loss_policy,
                                pe_working_set_t * data_set);
-
-extern rsc_to_node_t *generate_location_rule(resource_t * rsc, xmlNode * location_rule,
-                                             pe_working_set_t * data_set);
 
 extern gint sort_node_weight(gconstpointer a, gconstpointer b, gpointer data_set);
 

@@ -71,13 +71,17 @@ status()
 # rpm based distros
 if [ -d @sysconfdir@/sysconfig ]; then
 	[ -f @INITDIR@/functions ] && . @INITDIR@/functions
+set -a
 	[ -f @sysconfdir@/sysconfig/pacemaker ] && . @sysconfdir@/sysconfig/pacemaker
+set +a
 	[ -z "$LOCK_FILE" ] && LOCK_FILE="@localstatedir@/lock/subsys/pacemaker"
 fi
 
 # deb based distros
 if [ -d @sysconfdir@/default ]; then
+set -a
 	[ -f @sysconfdir@/default/pacemaker ] && . @sysconfdir@/default/pacemaker
+set +a
 	[ -z "$LOCK_FILE" ] && LOCK_FILE="@localstatedir@/lock/pacemaker"
 fi
 
@@ -130,7 +134,7 @@ cman_pre_start()
     fi
 
     # start cman's friends if they're not running but were configured to start automatically
-    for cservice in clvmd cmirror gfs2; do
+    for cservice in cmirrord clvmd gfs2; do
 	chkconfig --list $cservice 2>/dev/null | grep -q ":on"
 	if [ $? -eq 0 ]; then
 	    service $cservice status >/dev/null 2>&1

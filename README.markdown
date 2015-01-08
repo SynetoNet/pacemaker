@@ -17,14 +17,25 @@ resource health.
 * [Mailing list](http://oss.clusterlabs.org/mailman/listinfo/pacemaker).
 * [Documentation](http://www.clusterlabs.org/doc)
 
-## Important information about the _crm shell_
-Since late-April, the _crm shell_ is no longer included in the Pacemaker source tree.
-This change was made at the author's request as it is now maintained as a separate project at https://savannah.nongnu.org/projects/crmsh/
+## User interfaces / shells
+
+There are multiple user interfaces for Pacemaker, both command line
+tools, graphical user interfaces and web frontends. The _crm shell_
+used to be included in the Pacemaker source tree, but is now
+maintained as a separate project.
+
+This is not meant to be an exhaustive list:
+
+* _crmsh_: https://crmsh.github.io/
+* _pcs_: https://github.com/feist/pcs/
+* _LCMC_: http://lcmc.sourceforge.net/
+* _hawk_: https://github.com/ClusterLabs/hawk
 
 ## Build Dependencies
 * automake
 * autoconf
 * libtool-ltdl-devel
+* libuuid-devel
 * pkgconfig
 * python
 * glib2-devel
@@ -46,6 +57,8 @@ This change was made at the author's request as it is now maintained as a separa
 * ncurses-devel
 * openssl-devel
 * libselinux-devel
+* systemd-devel
+* dbus-devel
 * cluster-glue-libs-devel (LHA style fencing agents)
 * libesmtp-devel (Email alerts)
 * lm_sensors-devel (SNMP alerts)

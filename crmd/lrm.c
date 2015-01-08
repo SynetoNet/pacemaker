@@ -630,7 +630,7 @@ append_restart_list(lrmd_rsc_info_t * rsc, lrmd_event_data_t * op, xmlNode * upd
             crm_xml_add(restart, param, value);
         }
         len += strlen(param) + 2;
-        list = realloc(list, len + 1);
+        list = realloc_safe(list, len + 1);
         sprintf(list + start, " %s ", param);
     }
 
@@ -1162,8 +1162,13 @@ get_lrm_resource(lrm_state_t * lrm_state, xmlNode * resource, xmlNode * op_msg, 
         if (!rsc) {
             fsa_data_t *msg_data = NULL;
 
-            crm_err("Could not add resource %s to LRM", id);
-            register_fsa_error(C_FSA_INTERNAL, I_FAIL, NULL);
+            crm_err("Could not add resource %s to LRM %s", id, lrm_state->node_name);
+            /* only register this as a internal error if this involves the local
+             * lrmd. Otherwise we're likely dealing with an unresponsive remote-node
+             * which is not a FSA failure. */
+            if (lrm_state_is_local(lrm_state) == TRUE) {
+                register_fsa_error(C_FSA_INTERNAL, I_FAIL, NULL);
+            }
         }
     }
 
@@ -1175,13 +1180,17 @@ delete_resource(lrm_state_t * lrm_state,
                 const char *id,
                 lrmd_rsc_info_t * rsc,
                 GHashTableIter * gIter,
-                const char *sys, const char *host, const char *user, ha_msg_input_t * request)
+                const char *sys,
+                const char *host,
+                const char *user,
+                ha_msg_input_t * request,
+                gboolean unregister)
 {
     int rc = pcmk_ok;
 
     crm_info("Removing resource %s for %s (%s) on %s", id, sys, user ? user : "internal", host);
 
-    if (rsc) {
+    if (rsc && unregister) {
         rc = lrm_state_unregister_rsc(lrm_state, id, 0);
     }
 
@@ -1207,6 +1216,28 @@ delete_resource(lrm_state_t * lrm_state,
     delete_rsc_entry(lrm_state, request, id, gIter, rc, user);
 }
 
+static int
+get_fake_call_id(lrm_state_t *lrm_state, const char *rsc_id)
+{
+    int call_id = 0;
+    rsc_history_t *entry = NULL;
+
+    entry = g_hash_table_lookup(lrm_state->resource_history, rsc_id);
+
+    /* Make sure the call id is greater than the last successful operation,
+     * otherwise the failure will not result in a possible recovery of the resource
+     * as it could appear the failure occurred before the successful start */
+    if (entry) {
+        call_id = entry->last_callid + 1;
+    }
+
+    if (call_id < 0) {
+        call_id = 1;
+    }
+    return call_id;
+}
+
+
 /*	 A_LRM_INVOKE	*/
 void
 do_lrm_invoke(long long action,
@@ -1224,6 +1255,7 @@ do_lrm_invoke(long long action,
     const char *user_name = NULL;
     const char *target_node = NULL;
     gboolean is_remote_node = FALSE;
+    gboolean crm_rsc_delete = FALSE;
 
     if (input->xml != NULL) {
         /* Remote node operations are routed here to their remote connections */
@@ -1259,13 +1291,14 @@ do_lrm_invoke(long long action,
     crm_trace("LRM command from: %s", from_sys);
 
     if (safe_str_eq(crm_op, CRM_OP_LRM_DELETE)) {
+        /* remember this delete op came from crm_resource */
+        crm_rsc_delete = TRUE;
         operation = CRMD_ACTION_DELETE;
 
     } else if (safe_str_eq(crm_op, CRM_OP_LRM_REFRESH)) {
         operation = CRM_OP_LRM_REFRESH;
 
     } else if (safe_str_eq(crm_op, CRM_OP_LRM_FAIL)) {
-        rsc_history_t *entry = NULL;
         lrmd_event_data_t *op = NULL;
         lrmd_rsc_info_t *rsc = NULL;
         xmlNode *xml_rsc = find_xml_node(input->xml, XML_CIB_TAG_RESOURCE, TRUE);
@@ -1286,16 +1319,7 @@ do_lrm_invoke(long long action,
 
         free((char *)op->user_data);
         op->user_data = NULL;
-        entry = g_hash_table_lookup(lrm_state->resource_history, op->rsc_id);
-        /* Make sure the call id is greater than the last successful operation,
-         * otherwise the failure will not result in a possible recovery of the resource
-         * as it could appear the failure occurred before the successful start */
-        if (entry) {
-            op->call_id = entry->last_callid + 1;
-            if (op->call_id < 0) {
-                op->call_id = 1;
-            }
-        }
+        op->call_id = get_fake_call_id(lrm_state, op->rsc_id);
         op->interval = 0;
         op->op_status = PCMK_LRM_OP_DONE;
         op->rc = PCMK_OCF_UNKNOWN_ERROR;
@@ -1375,8 +1399,13 @@ do_lrm_invoke(long long action,
 
         g_hash_table_iter_init(&gIter, lrm_state->resource_history);
         while (g_hash_table_iter_next(&gIter, NULL, (void **)&entry)) {
+            /* only unregister the resource during a reprobe if it is not a remote connection
+             * resource. otherwise unregistering the connection will terminate remote-node
+             * membership */
+            gboolean unregister = is_remote_lrmd_ra(NULL, NULL, entry->id) ? FALSE : TRUE;
+
             delete_resource(lrm_state, entry->id, &entry->rsc, &gIter, from_sys, from_host,
-                            user_name, NULL);
+                            user_name, NULL, unregister);
         }
 
         /* Now delete the copy in the CIB */
@@ -1418,6 +1447,21 @@ do_lrm_invoke(long long action,
         rsc = get_lrm_resource(lrm_state, xml_rsc, input->xml, create_rsc);
 
         if (rsc == NULL && create_rsc) {
+            lrmd_event_data_t *op = NULL;
+
+            /* if the operation couldn't complete because we can't register
+             * the resource, return a generic error */
+            op = construct_op(lrm_state, input->xml, ID(xml_rsc), operation);
+            CRM_ASSERT(op != NULL);
+
+            op->op_status = PCMK_LRM_OP_DONE;
+            op->rc = PCMK_OCF_UNKNOWN_ERROR;
+            op->t_run = time(NULL);
+            op->t_rcchange = op->t_run;
+
+            send_direct_ack(from_host, from_sys, NULL, op, ID(xml_rsc));
+            lrmd_free_event(op);
+
             crm_err("Invalid resource definition");
             crm_log_xml_warn(input->msg, "bad input");
 
@@ -1499,6 +1543,7 @@ do_lrm_invoke(long long action,
             free(op_key);
 
         } else if (rsc != NULL && safe_str_eq(operation, CRMD_ACTION_DELETE)) {
+            gboolean unregister = TRUE;
 
 #if ENABLE_ACL
             int cib_rc = delete_rsc_status(lrm_state, rsc->id, cib_dryrun | cib_sync_call, user_name);
@@ -1523,7 +1568,11 @@ do_lrm_invoke(long long action,
                 return;
             }
 #endif
-            delete_resource(lrm_state, rsc->id, rsc, NULL, from_sys, from_host, user_name, input);
+            if (crm_rsc_delete == TRUE && is_remote_lrmd_ra(NULL, NULL, rsc->id)) {
+                unregister = FALSE;
+            }
+
+            delete_resource(lrm_state, rsc->id, rsc, NULL, from_sys, from_host, user_name, input, unregister);
 
         } else if (rsc != NULL) {
             do_lrm_rsc_op(lrm_state, rsc, operation, input->xml, input->msg);
@@ -1750,6 +1799,7 @@ do_lrm_rsc_op(lrm_state_t * lrm_state, lrmd_rsc_info_t * rsc, const char *operat
     lrmd_key_value_t *params = NULL;
     fsa_data_t *msg_data = NULL;
     const char *transition = NULL;
+    gboolean stop_recurring = FALSE;
 
     CRM_CHECK(rsc != NULL, return);
     CRM_CHECK(operation != NULL, return);
@@ -1764,10 +1814,25 @@ do_lrm_rsc_op(lrm_state_t * lrm_state, lrmd_rsc_info_t * rsc, const char *operat
     op = construct_op(lrm_state, msg, rsc->id, operation);
     CRM_CHECK(op != NULL, return);
 
-    /* stop any previous monitor operations before changing the resource state */
-    if (op->interval == 0
+    if (is_remote_lrmd_ra(NULL, NULL, rsc->id)
+        && op->interval == 0
+        && strcmp(operation, CRMD_ACTION_MIGRATE) == 0) {
+
+        /* pcmk remote connections are a special use case.
+         * We never ever want to stop monitoring a connection resource until
+         * the entire migration has completed. If the connection is ever unexpected
+         * severed, even during a migration, this is an event we must detect.*/
+        stop_recurring = FALSE;
+
+    } else if (op->interval == 0
         && strcmp(operation, CRMD_ACTION_STATUS) != 0
         && strcmp(operation, CRMD_ACTION_NOTIFY) != 0) {
+
+        /* stop any previous monitor operations before changing the resource state */
+        stop_recurring = TRUE;
+    }
+
+    if (stop_recurring == TRUE) {
         guint removed = 0;
         struct stop_recurring_action_s data;
 
@@ -1820,9 +1885,19 @@ do_lrm_rsc_op(lrm_state_t * lrm_state, lrmd_rsc_info_t * rsc, const char *operat
                              op->op_type,
                              op->user_data, op->interval, op->timeout, op->start_delay, params);
 
-    if (call_id <= 0) {
+    if (call_id <= 0 && lrm_state_is_local(lrm_state)) {
         crm_err("Operation %s on %s failed: %d", operation, rsc->id, call_id);
         register_fsa_error(C_FSA_INTERNAL, I_FAIL, NULL);
+
+    } else if (call_id <= 0) {
+
+        crm_err("Operation %s on resource %s failed to execute on remote node %s: %d", operation, rsc->id, lrm_state->node_name, call_id);
+        op->call_id = get_fake_call_id(lrm_state, rsc->id);
+        op->op_status = PCMK_LRM_OP_DONE;
+        op->rc = PCMK_OCF_UNKNOWN_ERROR;
+        op->t_run = time(NULL);
+        op->t_rcchange = op->t_run;
+        process_lrm_event(lrm_state, op);
 
     } else {
         /* record all operations so we can wait

@@ -206,7 +206,7 @@ static inline bool TRACKING_CHANGES(xmlNode *xml)
         } else if(rc >= ((max) - (offset))) {                           \
             char *tmp = NULL;                                           \
             (max) = QB_MAX(CHUNK_SIZE, (max) * 2);                      \
-            tmp = realloc((buffer), (max) + 1);                         \
+            tmp = realloc_safe((buffer), (max) + 1);                         \
             CRM_ASSERT(tmp);                                            \
             (buffer) = tmp;                                             \
         } else {                                                        \
@@ -223,7 +223,7 @@ insert_prefix(int options, char **buffer, int *offset, int *max, int depth)
 
         if ((*buffer) == NULL || spaces >= ((*max) - (*offset))) {
             (*max) = QB_MAX(CHUNK_SIZE, (*max) * 2);
-            (*buffer) = realloc((*buffer), (*max) + 1);
+            (*buffer) = realloc_safe((*buffer), (*max) + 1);
         }
         memset((*buffer) + (*offset), ' ', spaces);
         (*offset) += spaces;
@@ -305,7 +305,7 @@ static void __xml_schema_add(
     int last = xml_schema_max;
 
     xml_schema_max++;
-    known_schemas = realloc(known_schemas, xml_schema_max*sizeof(struct schema_s));
+    known_schemas = realloc_safe(known_schemas, xml_schema_max*sizeof(struct schema_s));
     CRM_ASSERT(known_schemas != NULL);
     memset(known_schemas+last, 0, sizeof(struct schema_s));
     known_schemas[last].type = type;
@@ -386,6 +386,7 @@ static int __xml_build_schema_list(void)
                     xslt = get_schema_path(NULL, transform);
                     if(stat(xslt, &s) != 0) {
                         crm_err("Transform %s not found", xslt);
+                        free(xslt);
                         __xml_schema_add(2, version, NULL, NULL, NULL, -1);
                         break;
                     } else {
@@ -1280,7 +1281,10 @@ __xml_build_changes(xmlNode * xml, xmlNode *patchset)
         for (pIter = crm_first_attr(xml); pIter != NULL; pIter = pIter->next) {
             const char *value = crm_element_value(xml, (const char *)pIter->name);
 
-            crm_xml_add(result, (const char *)pIter->name, value);
+            p = pIter->_private;
+            if (is_not_set(p->flags, xpf_deleted)) {
+                crm_xml_add(result, (const char *)pIter->name, value);
+            }
         }
     }
 
@@ -1827,10 +1831,11 @@ __subtract_xml_object(xmlNode * target, xmlNode * patch)
     for (xIter = crm_first_attr(patch); xIter != NULL; xIter = xIter->next) {
         const char *p_name = (const char *)xIter->name;
 
-        xml_remove_prop(target, p_name);
+        /* Removing and then restoring the id field would change the ordering of properties */
+        if (safe_str_neq(p_name, XML_ATTR_ID)) {
+            xml_remove_prop(target, p_name);
+        }
     }
-    /* Restore the id field, it is never allowed to change */
-    crm_xml_add(target, XML_ATTR_ID, id);
 
     /* changes to child objects */
     cIter = __xml_first_child(target);
@@ -1950,9 +1955,11 @@ bool xml_patch_versions(xmlNode *patchset, int add[3], int del[3])
             return -EINVAL;
     }
 
-    for(lpc = 0; lpc < DIMOF(vfields); lpc++) {
-        crm_element_value_int(tmp, vfields[lpc], &(del[lpc]));
-        crm_trace("Got %d for del[%s]", del[lpc], vfields[lpc]);
+    if (tmp) {
+        for(lpc = 0; lpc < DIMOF(vfields); lpc++) {
+            crm_element_value_int(tmp, vfields[lpc], &(del[lpc]));
+            crm_trace("Got %d for del[%s]", del[lpc], vfields[lpc]);
+        }
     }
 
     switch(format) {
@@ -1973,9 +1980,11 @@ bool xml_patch_versions(xmlNode *patchset, int add[3], int del[3])
             return -EINVAL;
     }
 
-    for(lpc = 0; lpc < DIMOF(vfields); lpc++) {
-        crm_element_value_int(tmp, vfields[lpc], &(add[lpc]));
-        crm_trace("Got %d for add[%s]", add[lpc], vfields[lpc]);
+    if (tmp) {
+        for(lpc = 0; lpc < DIMOF(vfields); lpc++) {
+            crm_element_value_int(tmp, vfields[lpc], &(add[lpc]));
+            crm_trace("Got %d for add[%s]", add[lpc], vfields[lpc]);
+        }
     }
 
     return pcmk_ok;
@@ -2751,6 +2760,7 @@ create_xml_node(xmlNode * parent, const char *name)
     xmlNode *node = NULL;
 
     if (name == NULL || name[0] == 0) {
+        CRM_CHECK(name != NULL && name[0] == 0, return NULL);
         return NULL;
     }
 
@@ -2897,7 +2907,7 @@ crm_xml_err(void *ctx, const char *msg, ...)
         buf = NULL;
 
     } else {
-        buffer = realloc(buffer, 1 + buffer_len + len);
+        buffer = realloc_safe(buffer, 1 + buffer_len + len);
         memcpy(buffer + buffer_len, buf, len);
         buffer_len += len;
         buffer[buffer_len] = 0;
@@ -2989,7 +2999,7 @@ stdin2xml(void)
             break;
         }
 
-        xml_buffer = realloc(xml_buffer, next);
+        xml_buffer = realloc_safe(xml_buffer, next);
         read_chars = fread(xml_buffer + data_length, 1, XML_BUFFER_SIZE, stdin);
         data_length += read_chars;
     } while (read_chars > 0);
@@ -3035,7 +3045,7 @@ decompress_file(const char *filename)
 
     rc = BZ_OK;
     while (rc == BZ_OK) {
-        buffer = realloc(buffer, XML_BUFFER_SIZE + length + 1);
+        buffer = realloc_safe(buffer, XML_BUFFER_SIZE + length + 1);
         read_len = BZ2_bzRead(&rc, bz_file, buffer + length, XML_BUFFER_SIZE);
 
         crm_trace("Read %ld bytes from file: %d", (long)read_len, rc);
@@ -3293,7 +3303,7 @@ crm_xml_escape_shuffle(char *text, int start, int *length, const char *replace)
     int offset = strlen(replace) - 1;   /* We have space for 1 char already */
 
     *length += offset;
-    text = realloc(text, *length);
+    text = realloc_safe(text, *length);
 
     for (lpc = (*length) - 1; lpc > (start + offset); lpc--) {
         text[lpc] = text[lpc - offset];
@@ -3303,7 +3313,7 @@ crm_xml_escape_shuffle(char *text, int start, int *length, const char *replace)
     return text;
 }
 
-static char *
+char *
 crm_xml_escape(const char *text)
 {
     int index;
@@ -4839,8 +4849,13 @@ replace_xml_child(xmlNode * parent, xmlNode * child, xmlNode * update, gboolean 
 
             xml_accept_changes(tmp);
             old = xmlReplaceNode(child, tmp);
-            xml_calculate_changes(old, tmp);
 
+            if(xml_tracking_changes(tmp)) {
+                /* Replaced sections may have included relevant ACLs */
+                __xml_acl_apply(tmp);
+            }
+
+            xml_calculate_changes(old, tmp);
             xmlDocSetRootElement(doc, old);
             free_xml(old);
         }
@@ -5361,7 +5376,7 @@ crm_xml_init(void)
     if(init) {
         init = FALSE;
         /* The default allocator XML_BUFFER_ALLOC_EXACT does far too many
-         * realloc()s and it can take upwards of 18 seconds (yes, seconds)
+         * realloc_safe()s and it can take upwards of 18 seconds (yes, seconds)
          * to dump a 28kb tree which XML_BUFFER_ALLOC_DOUBLEIT can do in
          * less than 1 second.
          */
@@ -5710,7 +5725,7 @@ update_validation(xmlNode ** xml_blob, int *best, int max, gboolean transform, g
                 }
 
             } else {
-                crm_notice("Upgrading %s-style configuration to %s with %s",
+                crm_debug("Upgrading %s-style configuration to %s with %s",
                            known_schemas[lpc].name, known_schemas[next].name,
                            known_schemas[lpc].transform ? known_schemas[lpc].transform : "no-op");
 
@@ -5741,7 +5756,7 @@ update_validation(xmlNode ** xml_blob, int *best, int max, gboolean transform, g
     }
 
     if (*best > match) {
-        crm_notice("%s the configuration from %s to %s",
+        crm_info("%s the configuration from %s to %s",
                    transform?"Transformed":"Upgraded",
                    value ? value : "<none>", known_schemas[*best].name);
         crm_xml_add(xml, XML_ATTR_VALIDATION, known_schemas[*best].name);
@@ -5979,7 +5994,7 @@ get_xpath_object_relative(const char *xpath, xmlNode * xml_obj, int error_level)
     len += strlen(xpath);
 
     xpath_full = strdup(xpath_prefix);
-    xpath_full = realloc(xpath_full, len + 1);
+    xpath_full = realloc_safe(xpath_full, len + 1);
     strncat(xpath_full, xpath, len);
 
     result = get_xpath_object(xpath_full, xml_obj, error_level);

@@ -75,6 +75,7 @@ CC_IN_CONFIGURE=yes
 export CC_IN_CONFIGURE
 
 LDD=ldd
+BUILD_ATOMIC_ATTRD=1
 
 dnl ========================================================================
 dnl Compiler characteristics
@@ -898,14 +899,16 @@ dnl Although n-library is preferred, only look for it if the n-header was found.
 CURSESLIBS=''
 if test "$ac_cv_header_ncurses_h" = "yes"; then
   AC_CHECK_LIB(ncurses, printw,
-    [CURSESLIBS='-lncurses'; AC_DEFINE(HAVE_LIBNCURSES,1, have ncurses library)]
+    [AC_DEFINE(HAVE_LIBNCURSES,1, have ncurses library)]
   )
+  CURSESLIBS=`$PKGCONFIG --libs ncurses`;
 fi
 
 if test "$ac_cv_header_ncurses_ncurses_h" = "yes"; then
   AC_CHECK_LIB(ncurses, printw,
-    [CURSESLIBS='-lncurses'; AC_DEFINE(HAVE_LIBNCURSES,1, have ncurses library)]
+    [AC_DEFINE(HAVE_LIBNCURSES,1, have ncurses library)]
   )
+  CURSESLIBS=`$PKGCONFIG --libs ncurses`;
 fi
 
 dnl Only look for non-n-library if there was no n-library.
@@ -1260,6 +1263,7 @@ case $SUPPORT_HEARTBEAT in
 	dnl objdump -x ${libdir}/libccmclient.so | grep SONAME | awk '{print $2}'
 	AC_DEFINE_UNQUOTED(CCM_LIBRARY, "libccmclient.so.1", Library to load for ccm support)
 	AC_DEFINE_UNQUOTED(HEARTBEAT_LIBRARY, "libhbclient.so.1", Library to load for heartbeat support)
+	BUILD_ATOMIC_ATTRD=0
    else
 	SUPPORT_HEARTBEAT=0
    fi
@@ -1341,6 +1345,7 @@ SUPPORT_PLUGIN=0
 if test $SUPPORT_CS = 1 -a x$HAVE_confdb = x1; then
     dnl Need confdb to support cman and the plugins
     SUPPORT_PLUGIN=1
+    BUILD_ATOMIC_ATTRD=0
     LCRSODIR=`$PKGCONFIG corosync --variable=lcrsodir`
     STACKS="$STACKS corosync-plugin"
     COROSYNC_LIBS="$COROSYNC_LIBS $confdb_LIBS"
@@ -1382,6 +1387,9 @@ AM_CONDITIONAL(BUILD_CS_SUPPORT, test $SUPPORT_CS = 1)
 AM_CONDITIONAL(BUILD_CS_PLUGIN, test $SUPPORT_PLUGIN = 1)
 AM_CONDITIONAL(BUILD_CMAN, test $SUPPORT_CMAN = 1)
 
+AM_CONDITIONAL(BUILD_ATOMIC_ATTRD, test $BUILD_ATOMIC_ATTRD = 1)
+AC_DEFINE_UNQUOTED(HAVE_ATOMIC_ATTRD, $BUILD_ATOMIC_ATTRD, Support the new atomic attrd)
+
 AC_SUBST(SUPPORT_CMAN)
 AC_SUBST(SUPPORT_CS)
 
@@ -1401,6 +1409,9 @@ else
     PCMK_FEATURES="$PCMK_FEATURES $STACKS"
 fi
 
+if test ${BUILD_ATOMIC_ATTRD} = 1; then
+    PCMK_FEATURES="$PCMK_FEATURES atomic-attrd"
+fi
 AC_SUBST(CLUSTERLIBS)
 AC_SUBST(LCRSODIR)
 
@@ -1690,7 +1701,6 @@ else
 
 	# We had to eliminate -Wnested-externs because of libtool changes
         EXTRA_FLAGS="-fgnu89-inline
-		-fstack-protector-all
 		-Wall
 		-Waggregate-return
 		-Wbad-function-cast
@@ -1706,7 +1716,6 @@ else
 		-Wnested-externs
 		-Wno-long-long
 		-Wno-strict-aliasing
-		-Wunused-but-set-variable
 		-Wpointer-arith
 		-Wstrict-prototypes
 		-Wwrite-strings
@@ -1873,6 +1882,7 @@ tools/Makefile							\
 	tools/crm_report					\
         tools/report.common                                     \
 	tools/cibsecret						\
+	tools/crm_mon.upstart					\
 xml/Makefile							\
 lib/gnu/Makefile						\
 		)

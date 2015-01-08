@@ -192,7 +192,7 @@ create_device_registration_xml(const char *id, const char *namespace, const char
 #endif
 
     crm_xml_add(data, XML_ATTR_ID, id);
-    crm_xml_add(data, "origin", __FUNCTION__);
+    crm_xml_add(data, F_STONITH_ORIGIN, __FUNCTION__);
     crm_xml_add(data, "agent", agent);
     crm_xml_add(data, "namespace", namespace);
     if (rsc_provides) {
@@ -229,7 +229,7 @@ stonith_api_remove_device(stonith_t * st, int call_options, const char *name)
     xmlNode *data = NULL;
 
     data = create_xml_node(NULL, F_STONITH_DEVICE);
-    crm_xml_add(data, "origin", __FUNCTION__);
+    crm_xml_add(data, F_STONITH_ORIGIN, __FUNCTION__);
     crm_xml_add(data, XML_ATTR_ID, name);
     rc = stonith_send_command(st, STONITH_OP_DEVICE_DEL, data, NULL, call_options, 0);
     free_xml(data);
@@ -244,7 +244,7 @@ stonith_api_remove_level(stonith_t * st, int options, const char *node, int leve
     xmlNode *data = NULL;
 
     data = create_xml_node(NULL, F_STONITH_LEVEL);
-    crm_xml_add(data, "origin", __FUNCTION__);
+    crm_xml_add(data, F_STONITH_ORIGIN, __FUNCTION__);
     crm_xml_add(data, F_STONITH_TARGET, node);
     crm_xml_add_int(data, XML_ATTR_ID, level);
     rc = stonith_send_command(st, STONITH_OP_LEVEL_DEL, data, NULL, options, 0);
@@ -260,7 +260,7 @@ create_level_registration_xml(const char *node, int level, stonith_key_value_t *
 
     crm_xml_add_int(data, XML_ATTR_ID, level);
     crm_xml_add(data, F_STONITH_TARGET, node);
-    crm_xml_add(data, "origin", __FUNCTION__);
+    crm_xml_add(data, F_STONITH_ORIGIN, __FUNCTION__);
 
     for (; device_list; device_list = device_list->next) {
         xmlNode *dev = create_xml_node(data, F_STONITH_DEVICE);
@@ -308,7 +308,7 @@ append_arg(gpointer key, gpointer value, gpointer user_data)
         last = strlen(*args);
     }
 
-    *args = realloc(*args, last + len);
+    *args = realloc_safe(*args, last + len);
     crm_trace("Appending: %s=%s", (char *)key, (char *)value);
     sprintf((*args) + last, "%s=%s\n", (char *)key, (char *)value);
 }
@@ -627,7 +627,7 @@ read_output(int fd)
                               * 'more' is always less than our buffer size
                               */
             crm_trace("Got %d more bytes: %.200s...", more, buffer);
-            output = realloc(output, len + more + 1);
+            output = realloc_safe(output, len + more + 1);
             snprintf(output + len, more + 1, "%s", buffer);
             len += more;
         }
@@ -663,9 +663,11 @@ stonith_action_async_done(mainloop_child_t * p, pid_t pid, int core, int signo, 
 
     if (action->timer_sigterm > 0) {
         g_source_remove(action->timer_sigterm);
+        action->timer_sigterm = 0;
     }
     if (action->timer_sigkill > 0) {
         g_source_remove(action->timer_sigkill);
+        action->timer_sigkill = 0;
     }
 
     if (action->last_timeout_signo) {
@@ -1253,7 +1255,7 @@ stonith_api_query(stonith_t * stonith, int call_options, const char *target,
     CRM_CHECK(devices != NULL, return -EINVAL);
 
     data = create_xml_node(NULL, F_STONITH_DEVICE);
-    crm_xml_add(data, "origin", __FUNCTION__);
+    crm_xml_add(data, F_STONITH_ORIGIN, __FUNCTION__);
     crm_xml_add(data, F_STONITH_TARGET, target);
     crm_xml_add(data, F_STONITH_ACTION, "off");
     rc = stonith_send_command(stonith, STONITH_OP_QUERY, data, &output, call_options, timeout);
@@ -1294,7 +1296,7 @@ stonith_api_call(stonith_t * stonith,
     xmlNode *data = NULL;
 
     data = create_xml_node(NULL, F_STONITH_DEVICE);
-    crm_xml_add(data, "origin", __FUNCTION__);
+    crm_xml_add(data, F_STONITH_ORIGIN, __FUNCTION__);
     crm_xml_add(data, F_STONITH_DEVICE, id);
     crm_xml_add(data, F_STONITH_ACTION, action);
     crm_xml_add(data, F_STONITH_TARGET, victim);

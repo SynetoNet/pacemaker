@@ -755,7 +755,7 @@ apply_system_health(pe_working_set_t * data_set)
             for (; gIter2 != NULL; gIter2 = gIter2->next) {
                 resource_t *rsc = (resource_t *) gIter2->data;
 
-                rsc2node_new(health_strategy, rsc, system_health, node, data_set);
+                rsc2node_new(health_strategy, rsc, system_health, NULL, node, data_set);
             }
         }
 
@@ -861,6 +861,10 @@ probe_resources(pe_working_set_t * data_set)
             /* TODO enable container node probes once ordered probing is implemented. */
             continue;
 
+        } else if (node->details->rsc_discovery_enabled == FALSE) {
+            /* resource discovery is disabled for this node */
+            continue;
+
         } else if (probe_complete == NULL) {
             probe_complete = get_pseudo_op(CRM_OP_PROBED, data_set);
             if (is_set(data_set->flags, pe_flag_have_remote_nodes)) {
@@ -944,6 +948,28 @@ probe_resources(pe_working_set_t * data_set)
     return TRUE;
 }
 
+static void
+rsc_discover_filter(resource_t *rsc, node_t *node)
+{
+    GListPtr gIter = rsc->children;
+    resource_t *top = uber_parent(rsc);
+    node_t *match;
+
+    if (rsc->exclusive_discover == FALSE && top->exclusive_discover == FALSE) {
+        return;
+    }
+
+    for (; gIter != NULL; gIter = gIter->next) {
+        resource_t *child_rsc = (resource_t *) gIter->data;
+        rsc_discover_filter(child_rsc, node);
+    }
+
+    match = g_hash_table_lookup(rsc->allowed_nodes, node->details->id);
+    if (match && match->rsc_discover_mode != discover_exclusive) {
+        match->weight = -INFINITY;
+    }
+}
+
 /*
  * Count how many valid nodes we have (so we know the maximum number of
  *  colors we can resolve).
@@ -982,6 +1008,7 @@ stage2(pe_working_set_t * data_set)
             resource_t *rsc = (resource_t *) gIter2->data;
 
             common_apply_stickiness(rsc, node, data_set);
+            rsc_discover_filter(rsc, node);
         }
     }
 
@@ -1164,7 +1191,10 @@ allocate_resources(pe_working_set_t * data_set)
                 continue;
             }
             pe_rsc_trace(rsc, "Allocating: %s", rsc->id);
-            rsc->cmds->allocate(rsc, NULL, data_set);
+            /* for remote node connection resources, always prefer the partial migration
+             * target during resource allocation if the rsc is in the middle of a
+             * migration */ 
+            rsc->cmds->allocate(rsc, rsc->partial_migration_target, data_set);
         }
     }
 
@@ -1680,16 +1710,50 @@ apply_remote_node_ordering(pe_working_set_t *data_set)
                 action,
                 pe_order_preserve | pe_order_implies_then | pe_order_runnable_left,
                 data_set);
-
         } else if (safe_str_eq(action->task, "stop")) {
-            custom_action_order(action->rsc,
-                NULL,
-                action,
-                remote_rsc,
-                generate_op_key(remote_rsc->id, RSC_STOP, 0),
-                NULL,
-                pe_order_preserve | pe_order_implies_first,
-                data_set);
+            gboolean after_start = FALSE;
+
+            /* handle special case with baremetal remote where stop actions need to be
+             * ordered after the connection resource starts somewhere else. */
+            if (is_baremetal_remote_node(action->node)) {
+                node_t *cluster_node = remote_rsc->running_on ? remote_rsc->running_on->data : NULL;
+
+                /* if the current cluster node a baremetal connection resource
+                 * is residing on is unclean or went offline we can't process any
+                 * operations on that remote node until after it starts somewhere else. */
+                if (cluster_node == NULL ||
+                    cluster_node->details->unclean == TRUE ||
+                    cluster_node->details->online == FALSE) {
+                    after_start = TRUE;
+                } else if (g_list_length(remote_rsc->running_on) > 1 &&
+                           remote_rsc->partial_migration_source &&
+                            remote_rsc->partial_migration_target) {
+                    /* if we're caught in the middle of migrating a connection resource,
+                     * then we have to wait until after the resource migrates before performing
+                     * any actions. */
+                    after_start = TRUE;
+                }
+            }
+
+            if (after_start) {
+                custom_action_order(remote_rsc,
+                    generate_op_key(remote_rsc->id, RSC_START, 0),
+                    NULL,
+                    action->rsc,
+                    NULL,
+                    action,
+                    pe_order_preserve | pe_order_implies_then | pe_order_runnable_left,
+                    data_set);
+            } else {
+                custom_action_order(action->rsc,
+                    NULL,
+                    action,
+                    remote_rsc,
+                    generate_op_key(remote_rsc->id, RSC_STOP, 0),
+                    NULL,
+                    pe_order_preserve | pe_order_implies_first,
+                    data_set);
+            }
         }
     }
 }
@@ -1861,7 +1925,7 @@ expand_list(GListPtr list, char **rsc_list, char **node_list)
             }
 
             crm_trace("Adding %s (%dc) at offset %d", rsc_id, len - 2, existing_len);
-            *rsc_list = realloc(*rsc_list, len + existing_len);
+            *rsc_list = realloc_safe(*rsc_list, len + existing_len);
             sprintf(*rsc_list + existing_len, "%s ", rsc_id);
         }
 
@@ -1878,7 +1942,7 @@ expand_list(GListPtr list, char **rsc_list, char **node_list)
             }
 
             crm_trace("Adding %s (%dc) at offset %d", uname, len - 2, existing_len);
-            *node_list = realloc(*node_list, len + existing_len);
+            *node_list = realloc_safe(*node_list, len + existing_len);
             sprintf(*node_list + existing_len, "%s ", uname);
         }
     }

@@ -58,6 +58,8 @@ BUILD_COUNTER	?= build.counter
 LAST_COUNT      = $(shell test ! -e $(BUILD_COUNTER) && echo 0; test -e $(BUILD_COUNTER) && cat $(BUILD_COUNTER))
 COUNT           = $(shell expr 1 + $(LAST_COUNT))
 
+SPECVERSION	?= $(COUNT)
+
 init:
 	./autogen.sh
 
@@ -144,7 +146,7 @@ srpm-%:	export $(PACKAGE)-%.spec
 	if [ -e $(BUILD_COUNTER) ]; then					\
 		echo $(COUNT) > $(BUILD_COUNTER);				\
 	fi
-	sed -i 's/global\ specversion.*/global\ specversion\ $(COUNT)/' $(PACKAGE).spec
+	sed -i 's/global\ specversion.*/global\ specversion\ $(SPECVERSION)/' $(PACKAGE).spec
 	sed -i 's/global\ commit.*/global\ commit\ $(TAG)/' $(PACKAGE).spec
 	case "$(WITH)" in 	\
 	  *pre_release*)	\
@@ -321,9 +323,9 @@ cppcheck:
 
 clang:
 	test -e $(CLANG_analyzer)
-	scan-build $(CLANG_checkers:%=-enable-checker %) make
+	scan-build $(CLANG_checkers:%=-enable-checker %) make clean all
 
-# V3	= scandir unsetenv alphasort
+# V3	= scandir unsetenv alphasort xalloc
 # V2	= setenv strerror strchrnul strndup
 # http://www.gnu.org/software/gnulib/manual/html_node/Initial-import.html#Initial-import
 GNU_MODS	= crypto/md5
